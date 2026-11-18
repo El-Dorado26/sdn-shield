@@ -12,7 +12,7 @@ use crate::{COOKIE, Result, read_message, send};
 const DROP_COOKIE: u64 = COOKIE + 1;
 const MAX_STATS_ENTRIES: usize = 16384;
 
-fn connect(path: &str) -> Result<UnixStream> {
+pub(super) fn connect(path: &str) -> Result<UnixStream> {
     if !Path::new(path).is_absolute() {
         return Err("invalid switch socket: expected an absolute Unix socket path".into());
     }
@@ -52,7 +52,7 @@ fn reply(stream: &mut UnixStream, kind: MessageType, xid: u32) -> Result<Message
     Err("management reply limit exceeded".into())
 }
 
-fn stats(stream: &mut UnixStream) -> Result<Vec<FlowStatsEntry>> {
+pub(super) fn stats(stream: &mut UnixStream) -> Result<Vec<FlowStatsEntry>> {
     send(
         stream,
         FlowStatsRequest::new()

@@ -5,6 +5,7 @@ use std::net::{TcpListener, TcpStream};
 use std::time::Duration;
 
 mod control;
+mod monitor;
 
 use rovs_openflow::{
     ActionList, Flow, Header, Match, Message, MessageType, OfError, OutputPort, PacketIn,
@@ -195,11 +196,14 @@ fn serve(mut stream: TcpStream) -> Result<()> {
 
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("monitor") {
+        return monitor::run(&args);
+    }
     if matches!(args.first().map(String::as_str), Some("stats" | "drop")) {
         return control::run(&args);
     }
     if args.len() > 1 {
-        return Err("usage: sdn-shield-controller [LISTEN_ADDRESS] | stats SOCKET | drop SOCKET IN_PORT SOURCE_IPV4 DESTINATION_IPV4 SECONDS".into());
+        return Err("usage: sdn-shield-controller [LISTEN_ADDRESS] | stats SOCKET | drop SOCKET IN_PORT SOURCE_IPV4 DESTINATION_IPV4 SECONDS | monitor SOCKET INTERVAL_MS WINDOWS PPS_LIMIT BYTE_LIMIT".into());
     }
     let address = args.first().map_or("127.0.0.1:6653", String::as_str);
     let listener = TcpListener::bind(address)?;
