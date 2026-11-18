@@ -19,6 +19,7 @@ def main():
         .apt_install("mininet", "openvswitch-switch", "openvswitch-testcontroller",
                      "iproute2", "iputils-ping", "iperf3", "kmod")
         .add_local_file(ROOT / "topology.py", "/root/topology.py")
+        .add_local_file(ROOT / "events.py", "/root/events.py")
         .add_local_file(ROOT / "env" / "network_smoke_test.py", "/root/network_smoke_test.py")
     )
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")

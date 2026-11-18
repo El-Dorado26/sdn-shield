@@ -3,6 +3,9 @@ use std::net::TcpStream;
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
+#[cfg(unix)]
+mod management;
+
 struct Controller {
     child: Child,
     address: String,
@@ -62,7 +65,7 @@ fn frame(kind: u8, xid: u32, body: &[u8]) -> Vec<u8> {
     bytes
 }
 
-fn receive(stream: &mut TcpStream) -> (u8, u32, Vec<u8>) {
+fn receive(stream: &mut impl Read) -> (u8, u32, Vec<u8>) {
     let mut header = [0; 8];
     stream.read_exact(&mut header).unwrap();
     assert_eq!(header[0], 4);
