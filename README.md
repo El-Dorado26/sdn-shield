@@ -3,7 +3,40 @@
 
 SDN Shield is a research project that aims to monitor network traffic in real time, detect potential DDoS attacks, and automatically block them using OpenFlow rules. The project plans to develop a Rust-based SDN controller and compare threshold-based, entropy-based, and simple machine learning approaches under the same traffic scenarios.
 
-**Status:** Planning stage. This repository does not yet contain a working controller, setup scripts, or experimental results.
+**Status:** The Mininet/Open vSwitch connectivity smoke test is working. The Rust controller, DDoS detection, mitigation, and research benchmarks are not implemented yet.
+
+## Run the network smoke test
+
+Install Docker Engine with Docker Compose, or a Mac container runtime. Start the Docker engine, then run this command from the repository root:
+
+```sh
+docker compose up --build --exit-code-from lab
+```
+
+No Modal account, host Python installation, or physical network equipment is required. The first build needs internet access to download Ubuntu and its packages. The test container itself runs with networking disabled (`network_mode: none`), no published ports, and no Docker socket mount.
+
+The test uses eight Mininet hosts, one kernel-backed OVS switch, and `ovs-testcontroller` with OpenFlow 1.3. It checks:
+
+- Linux network namespaces, veth creation, and traffic shaping.
+- No default IPv4 route or active external interface in any Mininet host.
+- Direct OVS forwarding: 56/56 successful ping probes.
+- No forwarding when both the controller and flow rules are absent: 0/2 probes received (expected).
+- Controller-managed forwarding: 56/56 successful ping probes, with installed OpenFlow rules.
+- A TCP transfer targeting 500 Kbit/s, with each link capped at 1 Mbit/s.
+
+Success prints `ALL NETWORK SMOKE TESTS PASSED` and returns exit code 0. The container has a 180-second runtime limit, 2 CPUs, and 2 GiB of memory. Mininet may warn that it cannot tune all kernel resource limits inside the container; the connectivity assertions still run. This is a connectivity test, not a DDoS or performance benchmark.
+
+The combined setup/test log is saved to `runs/docker-smoke/test.log` and overwritten on each run. These logs are ignored by Git. After the test, remove the stopped Compose container with:
+
+```sh
+docker compose down
+```
+
+**Compatibility:** Verified on an Apple Silicon Mac using OrbStack's ARM64 Docker engine. Docker Desktop and native Linux Docker have not been verified. The Docker engine's Linux kernel must provide OVS datapath support; installing OVS packages in the container alone does not provide that kernel support. There is no automatic userspace fallback.
+
+**Security:** The lab requires `privileged: true` to manage its network namespaces and interfaces. This weakens container isolation even though external networking is disabled. Run only trusted project code on a development machine, not a production Docker host.
+
+An optional Modal VM runner remains available through `uv run env/modal_smoke_test.py` (requires `uv` and Modal authentication). Both runners use the same test in `env/network_smoke_test.py`.
 
 ## Objectives and scope
 

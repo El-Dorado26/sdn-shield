@@ -1,0 +1,11 @@
+services:
+  lab:
+    build: .
+    privileged: true
+    network_mode: none
+    init: true
+    cpus: 2
+    mem_limit: 2g
+    pids_limit: 256
+    volumes:
+      - ./runs/docker-smoke:/results
