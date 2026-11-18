@@ -7,6 +7,8 @@ use std::time::{Duration, Instant};
 
 use super::{frame, receive};
 
+mod monitor;
+
 struct Switch {
     path: PathBuf,
     listener: UnixListener,

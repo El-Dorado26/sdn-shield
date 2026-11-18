@@ -1,7 +1,9 @@
 import argparse
 import json
+import queue
 import re
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -13,15 +15,25 @@ def ovs(*args):
     return subprocess.check_output(args, text=True, timeout=10)
 
 
+def record(line, expected):
+    prefix, *parts = line.split()
+    assert prefix == expected, line
+    return dict(part.split("=", 1) for part in parts)
+
+
+def ping_summary(stdout):
+    summary = re.search(r"(\d+) packets transmitted, (\d+) received", stdout)
+    assert summary, stdout
+    return {"sent": int(summary[1]), "received": int(summary[2]), "stdout": stdout}
+
+
 def stats():
     output = subprocess.check_output([
         "sdn-shield-controller", "stats", "/var/run/openvswitch/s1.mgmt",
     ], text=True, timeout=10)
     rows = []
     for line in output.splitlines():
-        prefix, *parts = line.split()
-        assert prefix == "FLOW_STATS", line
-        fields = dict(part.split("=", 1) for part in parts)
+        fields = record(line, "FLOW_STATS")
         match = fields.pop("match")
         row = {key: int(value, 0) for key, value in fields.items()}
         row["match"] = dict(field.split("=", 1) for field in match.split(",") if field != "*")
@@ -40,9 +52,125 @@ def probe(host, destination):
             process.kill()
             process.wait()
     assert process.returncode in (0, 1), stderr or stdout
-    summary = re.search(r"(\d+) packets transmitted, (\d+) received", stdout)
-    assert summary, stdout
-    return {"sent": int(summary[1]), "received": int(summary[2]), "stdout": stdout}
+    return ping_summary(stdout)
+
+
+def threshold(net):
+    victim = net.get("h8")
+    out_dir = "/results" if Path("/results").is_dir() else "runs"
+    config = {"interval_ms": 1000, "windows": 8, "pps_limit": 75,
+              "bytes_per_second_limit": 7500, "mitigation": "off"}
+    events = EventLog(f"threshold-{time.time_ns()}", out_dir=out_dir, config=config)
+    directory = Path(events.path).parent
+    observer = None
+    reader = None
+    traffic = []
+    errors = (directory / "monitor.stderr").open("w")
+
+    def start_ping(name, count, interval):
+        logfile = directory / f"{name}-ping.log"
+        output = logfile.open("w")
+        try:
+            process = net.get(name).popen([
+                "ping", "-n", "-c", str(count), "-i", str(interval), "-W", "1", victim.IP(),
+            ], stdout=output, stderr=subprocess.STDOUT)
+        except Exception:
+            output.close()
+            raise
+        traffic.append((name, process, output, logfile, count))
+
+    try:
+        assert not any(row["cookie"] == 0x53444E0000000002 for row in stats())
+        observer = subprocess.Popen([
+            "sdn-shield-controller", "monitor", "/var/run/openvswitch/s1.mgmt",
+            "1000", "8", "75", "7500",
+        ], stdout=subprocess.PIPE, stderr=errors, text=True)
+        lines = queue.Queue()
+
+        def read_lines():
+            for line in observer.stdout:
+                lines.put(line)
+            lines.put(None)
+
+        reader = threading.Thread(target=read_lines, daemon=True)
+        reader.start()
+        samples, alarms, windows = [], [], []
+        deadline = time.monotonic() + 30
+        while True:
+            assert time.monotonic() < deadline, "Monitor test timed out"
+            try:
+                line = lines.get(timeout=min(8, max(0.1, deadline - time.monotonic())))
+            except queue.Empty as exc:
+                raise AssertionError("Monitor stopped producing periodic output") from exc
+            if line is None:
+                break
+            prefix = line.split()[0]
+            assert prefix in ("MONITOR_READY", "SAMPLE", "THRESHOLD_ALARM", "WINDOW_END"), line
+            fields = record(line, prefix)
+            fields = {key: value if key in ("destination", "mitigation")
+                      else float(value) if any(char in value for char in ".eE") else int(value)
+                      for key, value in fields.items()}
+            events.log(prefix.lower(), **fields)
+            if prefix == "MONITOR_READY":
+                assert fields == config, fields
+                events.log("normal_traffic_start", source="h5", packets=16, interval_seconds=0.5)
+                start_ping("h5", 16, 0.5)
+            elif prefix == "SAMPLE":
+                samples.append(fields)
+            elif prefix == "THRESHOLD_ALARM":
+                alarms.append(fields)
+            elif prefix == "WINDOW_END":
+                windows.append(fields["window"])
+                if fields["window"] == 2:
+                    events.log("traffic_burst_start", sources=["h1", "h2"], packets_per_host=100,
+                               interval_seconds=0.02, label="controlled_rate_burst_not_attack")
+                    for name in ("h1", "h2"):
+                        start_ping(name, 100, 0.02)
+        assert observer.wait(timeout=3) == 0, (directory / "monitor.stderr").read_text()
+        reader.join(timeout=1)
+        assert not reader.is_alive()
+        assert windows == list(range(1, 9)), windows
+        target = [sample for sample in samples if sample["destination"] == victim.MAC()]
+        assert len(target) == 8 and all(sample["complete"] == 1 for sample in target), target
+        assert not any(sample["alarm"] for sample in samples if sample["window"] in (1, 2, 7, 8)), samples
+        assert all(sample["packets"] > 0 for sample in target if sample["window"] in (1, 2)), target
+        assert alarms and all(alarm["destination"] == victim.MAC() for alarm in alarms), alarms
+        for sample in samples:
+            assert abs(sample["packets_per_second"] * sample["elapsed_seconds"] - sample["packets"]) < 0.000001
+            assert abs(sample["bytes_per_second"] * sample["elapsed_seconds"] - sample["bytes"]) < 0.000001
+            assert bool(sample["alarm"]) == (sample["packets_per_second"] > 75 or sample["bytes_per_second"] > 7500)
+        for name, process, output, logfile, count in traffic:
+            assert process.wait(timeout=3) == 0, logfile.read_text()
+            result = ping_summary(logfile.read_text())
+            events.log("traffic_result", source=name, **result)
+            assert result["sent"] == result["received"] == count, result
+        for name in ("h1", "h5"):
+            result = probe(net.get(name), victim)
+            events.log("post_monitor_probe", source=name, **result)
+            assert result["sent"] == result["received"] == 2, result
+        assert not any(row["cookie"] == 0x53444E0000000002 for row in stats())
+        events.log("test_result", success=True, alarms=len(alarms))
+        print("PASS: 8 periodic windows; low/recovery traffic has no threshold alarms", flush=True)
+        print("PASS: aggregated high-rate traffic triggers threshold alarms without blocking (200/200 received)", flush=True)
+        print("Threshold events:", events.path, flush=True)
+    except Exception as exc:
+        events.log("test_result", success=False, error=str(exc))
+        raise
+    finally:
+        if observer is not None and observer.poll() is None:
+            observer.terminate()
+            observer.wait(timeout=5)
+        if reader is not None:
+            reader.join(timeout=1)
+        if observer is not None:
+            observer.stdout.close()
+        errors.close()
+        for _, process, output, _, _ in traffic:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+            output.close()
+        events.close()
 
 
 def mitigation(net):
@@ -133,7 +261,10 @@ def mitigation(net):
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--controller", choices=("rust", "ovs"), default="rust")
+parser.add_argument("--mitigation-demo", action="store_true", help="also run the separate manual timed-drop demo")
 args = parser.parse_args()
+if args.mitigation_demo and args.controller != "rust":
+    parser.error("--mitigation-demo requires --controller rust")
 
 net = None
 controller = None
@@ -211,8 +342,10 @@ try:
     assert controller.poll() is None, "Controller exited during the traffic test"
     print("PASS: bounded TCP transfer:", json.dumps(received), flush=True)
     if args.controller == "rust":
-        mitigation(net)
-        assert controller.poll() is None, "Controller exited during the mitigation test"
+        threshold(net)
+        if args.mitigation_demo:
+            mitigation(net)
+        assert controller.poll() is None, "Controller exited during the monitoring test"
     print("ALL NETWORK SMOKE TESTS PASSED", flush=True)
 finally:
     if server is not None and server.poll() is None:
