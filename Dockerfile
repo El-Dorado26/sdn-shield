@@ -18,6 +18,6 @@ RUN apt-get update \
 
 COPY --from=controller-build /build/controller/target/release/sdn-shield-controller /usr/local/bin/
 WORKDIR /lab
-COPY topology.py ./
+COPY topology.py events.py ./
 COPY env/network_smoke_test.py env/docker-entrypoint.sh ./
 ENTRYPOINT ["timeout", "180", "bash", "/lab/docker-entrypoint.sh"]

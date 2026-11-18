@@ -4,6 +4,8 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::time::Duration;
 
+mod control;
+
 use rovs_openflow::{
     ActionList, Flow, Header, Match, Message, MessageType, OfError, OutputPort, PacketIn,
     PacketOut, Version,
@@ -192,11 +194,14 @@ fn serve(mut stream: TcpStream) -> Result<()> {
 }
 
 fn main() -> Result<()> {
-    let mut args = std::env::args().skip(1);
-    let address = args.next().unwrap_or_else(|| "127.0.0.1:6653".to_owned());
-    if args.next().is_some() {
-        return Err("usage: sdn-shield-controller [LISTEN_ADDRESS]".into());
+    let args: Vec<_> = std::env::args().skip(1).collect();
+    if matches!(args.first().map(String::as_str), Some("stats" | "drop")) {
+        return control::run(&args);
     }
+    if args.len() > 1 {
+        return Err("usage: sdn-shield-controller [LISTEN_ADDRESS] | stats SOCKET | drop SOCKET IN_PORT SOURCE_IPV4 DESTINATION_IPV4 SECONDS".into());
+    }
+    let address = args.first().map_or("127.0.0.1:6653", String::as_str);
     let listener = TcpListener::bind(address)?;
     println!("LISTENING {}", listener.local_addr()?);
     std::io::stdout().flush()?;
