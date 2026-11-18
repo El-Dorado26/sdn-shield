@@ -51,7 +51,7 @@ def main():
         setup.wait()
         if setup.returncode:
             raise SystemExit(setup.returncode)
-        process = sandbox.exec("/usr/bin/python3", "-u", "/root/network_smoke_test.py",
+        process = sandbox.exec("/usr/bin/python3", "-u", "/root/network_smoke_test.py", "--controller", "ovs",
                                workdir="/root", timeout=150)
         for name, stream in [("test.stdout", process.stdout), ("test.stderr", process.stderr)]:
             content = stream.read()

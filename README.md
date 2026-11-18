@@ -3,7 +3,7 @@
 
 SDN Shield is a research project that aims to monitor network traffic in real time, detect potential DDoS attacks, and automatically block them using OpenFlow rules. The project plans to develop a Rust-based SDN controller and compare threshold-based, entropy-based, and simple machine learning approaches under the same traffic scenarios.
 
-**Status:** The Mininet/Open vSwitch connectivity smoke test is working. The Rust controller, DDoS detection, mitigation, and research benchmarks are not implemented yet.
+**Status:** A Rust OpenFlow 1.3 controller prototype and the Mininet/Open vSwitch connectivity smoke test are working. DDoS detection, mitigation, periodic statistics collection, and research benchmarks are not implemented yet.
 
 ## Run the network smoke test
 
@@ -13,9 +13,9 @@ Install Docker Engine with Docker Compose, or a Mac container runtime. Start the
 docker compose up --build --exit-code-from lab
 ```
 
-No Modal account, host Python installation, or physical network equipment is required. The first build needs internet access to download Ubuntu and its packages. The test container itself runs with networking disabled (`network_mode: none`), no published ports, and no Docker socket mount.
+No Modal account, host Python installation, or physical network equipment is required. The first build needs internet access to download the Debian/Rust images, system packages, and locked Cargo dependencies. Rust compilation and protocol tests happen inside the Docker build; no host Rust installation is required. The test container itself runs with networking disabled (`network_mode: none`), no published ports, and no Docker socket mount.
 
-The test uses eight Mininet hosts, one kernel-backed OVS switch, and `ovs-testcontroller` with OpenFlow 1.3. It checks:
+The test uses eight Mininet hosts, one kernel-backed OVS switch, and the Rust controller with OpenFlow 1.3. It checks:
 
 - Linux network namespaces, veth creation, and traffic shaping.
 - No default IPv4 route or active external interface in any Mininet host.
@@ -36,7 +36,40 @@ docker compose down
 
 **Security:** The lab requires `privileged: true` to manage its network namespaces and interfaces. This weakens container isolation even though external networking is disabled. Run only trusted project code on a development machine, not a production Docker host.
 
-An optional Modal VM runner remains available through `uv run env/modal_smoke_test.py` (requires `uv` and Modal authentication). Both runners use the same test in `env/network_smoke_test.py`.
+To repeat the smoke test with the OVS test controller instead, after building the image:
+
+```sh
+docker compose run --rm lab --controller ovs
+```
+
+An optional Modal VM runner remains available through `uv run env/modal_smoke_test.py` (requires `uv` and Modal authentication). It explicitly uses the OVS test controller as an infrastructure baseline; it does not build or test the Rust controller. Both runners use the same test in `env/network_smoke_test.py`.
+
+## Rust controller prototype
+
+The Cargo project is in `controller/`. It uses [`rovs-openflow` 0.2.0](https://docs.rs/rovs-openflow/0.2.0/rovs_openflow/) for OpenFlow message parsing and encoding, with standard-library TCP for accepting the switch connection. The crate's `VConn` API initiates outgoing connections, so it is not used as a controller listener.
+
+The prototype:
+
+- Listens on `127.0.0.1:6653` by default; an optional positional argument changes the listening address.
+- Exchanges Hello/Features messages, answers Echo requests, and confirms table-miss rule setup with a Barrier reply.
+- Learns source MAC addresses from Packet-In messages and floods unknown/broadcast destinations with Packet-Out.
+- Installs unicast rules matching ingress port, source MAC, and destination MAC. Known unicast traffic stays in OVS, not in the Rust process.
+- Gives learned flows a 30-second idle timeout and 60-second hard timeout, and limits the MAC cache to 4096 entries.
+- Checks frame lengths, protocol version, ingress ports, and Ethernet data. Invalid messages close the switch session and are logged; the listener can accept a new connection.
+
+The Docker image runs the protocol tests before building the release binary. With Rust installed locally, run them with:
+
+```sh
+cargo test --locked --manifest-path controller/Cargo.toml
+```
+
+For a Linux lab outside Docker, the controller can be started with:
+
+```sh
+cargo run --release --locked --manifest-path controller/Cargo.toml -- 127.0.0.1:6653
+```
+
+**Prototype limits:** One switch connection is served at a time, with OpenFlow 1.3 and an untagged, static, loop-free topology. There is no TLS/authentication, MAC aging, or MAC-move/port-down handling. VLAN-tagged packets are rejected. Use only in the isolated lab. `rovs-openflow` also exposes flow-statistics APIs, but their end-to-end suitability has not yet been validated.
 
 ## Objectives and scope
 
@@ -58,7 +91,7 @@ The controller must also provide basic forwarding for normal traffic. Detection 
 
 | Component | Planned technology |
 | --- | --- |
-| Controller | Rust and a suitable existing OpenFlow library |
+| Controller | Rust with `rovs-openflow` 0.2.0 |
 | Virtual network | Mininet |
 | Virtual switch | Open vSwitch |
 | Attack simulation | hping3; Scapy when needed |
@@ -67,7 +100,7 @@ The controller must also provide basic forwarding for normal traffic. Detection 
 | Fallback controller | Ryu or another ready-made controller with verified compatibility |
 | Experiment environment | A single, isolated Linux server |
 
-The OpenFlow version and Rust library will be selected through an early compatibility experiment. Software versions will be pinned and setup commands added after the first working prototype.
+OpenFlow 1.3 and `rovs-openflow` 0.2.0 have passed the initial forwarding compatibility test. Cargo dependencies are recorded in `controller/Cargo.lock`; Docker uses Rust 1.92.0 and a Debian Bookworm runtime. System package versions are printed in the smoke-test log.
 
 ### Controller decision gate
 

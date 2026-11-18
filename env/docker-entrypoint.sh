@@ -18,5 +18,5 @@ mkdir -p /results
     ovs-vsctl add-br probe-br
     ovs-appctl dpif/show
     ovs-vsctl del-br probe-br
-    /usr/bin/python3 -u /lab/network_smoke_test.py
+    /usr/bin/python3 -u /lab/network_smoke_test.py "$@"
 } 2>&1 | tee /results/test.log

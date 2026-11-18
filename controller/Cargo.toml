@@ -1,0 +1,9 @@
+[package]
+name = "sdn-shield-controller"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+
+[dependencies]
+rovs-openflow = "=0.2.0"
